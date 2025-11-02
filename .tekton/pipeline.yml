@@ -1,0 +1,97 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: counter-ci-cd
+spec:
+  workspaces:
+    - name: shared
+  params:
+    - name: git-url
+      type: string
+    - name: git-rev
+      type: string
+      default: main
+    - name: app-name
+      type: string
+      default: counter
+    - name: build-image
+      type: string
+  tasks:
+    - name: cleanup
+      taskRef:
+        name: cleanup
+      workspaces:
+        - name: source
+          workspace: shared
+
+    - name: git-clone
+      runAfter: ["cleanup"]
+      taskRef:
+        kind: ClusterTask
+        name: git-clone
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-rev)
+        - name: deleteExisting
+          value: "true"
+      workspaces:
+        - name: output
+          workspace: shared
+
+    - name: flake8-linting
+      runAfter: ["git-clone"]
+      taskSpec:
+        workspaces:
+          - name: source
+        steps:
+          - name: flake8
+            image: python:3.9-slim
+            workingDir: $(workspaces.source.path)
+            script: |
+              #!/usr/bin/env bash
+              set -e
+              python -m pip install --upgrade pip
+              pip install -r requirements.txt
+              flake8 service --count --select=E9,F63,F7,F82 --show-source --statistics
+              flake8 service --count --max-complexity=10 --max-line-length=127 --statistics
+      workspaces:
+        - name: source
+          workspace: shared
+
+    - name: nose-tests
+      runAfter: ["flake8-linting"]
+      taskRef:
+        name: nose
+      workspaces:
+        - name: source
+          workspace: shared
+
+    - name: buildah
+      runAfter: ["nose-tests"]
+      taskRef:
+        kind: ClusterTask
+        name: buildah
+      params:
+        - name: IMAGE
+          value: $(params.build-image)
+        - name: CONTEXT
+          value: .
+        - name: DOCKERFILE
+          value: ./Dockerfile
+      workspaces:
+        - name: source
+          workspace: shared
+
+    - name: deploy
+      runAfter: ["buildah"]
+      taskRef:
+        kind: ClusterTask
+        name: openshift-client
+      params:
+        - name: SCRIPT
+          value: |
+            set -e
+            oc create deployment $(params.app-name) --image=$(params.build-image) --dry-run=client -o yaml | oc apply -f -
+            oc rollout status deploy/$(params.app-name)
