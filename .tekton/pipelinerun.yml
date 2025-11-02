@@ -1,0 +1,20 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  generateName: counter-ci-cd-
+spec:
+  pipelineRef:
+    name: counter-ci-cd
+  params:
+    - name: git-url
+      value: https://github.com/sthcopeland/ci-cd-final-project-.git
+    - name: git-rev
+      value: main
+    - name: app-name
+      value: counter
+    - name: build-image
+      value: image-registry.openshift-image-registry.svc:5000/counters-dev/counter:latest
+  workspaces:
+    - name: shared
+      persistentVolumeClaim:
+        claimName: oc-lab-pvc
